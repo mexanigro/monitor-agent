@@ -1,0 +1,22 @@
+{
+  "name": "monitor-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "db:init": "psql $DATABASE_URL -f src/db/schema.sql"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
