@@ -2,10 +2,10 @@ import type { MonitoredClient } from "./types.js";
 
 export const CLIENTS: MonitoredClient[] = [
   {
-    clientId: "demo-barber",
-    name: "Demo Barbershop",
+    clientId: "client_barber_01",
+    name: "Barber he Studio",
     url: "https://barber-shop-template-ten.vercel.app",
-    vercelProjectId: "prj_XXXX",
+    vercelProjectId: "prj_cIQZsZfo8xCBZRqLflo8QidHByYN",
     niche: "barberia",
     active: true,
   },
