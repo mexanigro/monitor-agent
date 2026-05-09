@@ -5,20 +5,7 @@ const TIMEOUT_MS = 10_000;
 const LATENCY_THRESHOLD_MS = 2_000;
 
 export async function firestoreCheck(client: MonitoredClient): Promise<CheckResult> {
-  const projectId = process.env.FIRESTORE_PROJECT_ID;
-  if (!projectId) {
-    return {
-      clientId: client.clientId,
-      checkType: "firestore",
-      success: false,
-      responseTimeMs: 0,
-      error: "FIRESTORE_PROJECT_ID not configured",
-    };
-  }
-
-  const url =
-    `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/config/${client.clientId}`;
-
+  const url = `${client.url}/api/tenant/status`;
   const start = performance.now();
   let statusCode: number | undefined;
 
@@ -31,24 +18,28 @@ export async function firestoreCheck(client: MonitoredClient): Promise<CheckResu
     statusCode = res.status;
     const responseTimeMs = Math.round(performance.now() - start);
 
-    const success = res.ok && responseTimeMs < LATENCY_THRESHOLD_MS;
     let error: string | undefined;
+    let success = res.ok && responseTimeMs < LATENCY_THRESHOLD_MS;
 
     if (!res.ok) {
       error = `HTTP ${statusCode}`;
-    } else if (responseTimeMs >= LATENCY_THRESHOLD_MS) {
-      error = `latency ${responseTimeMs}ms exceeds ${LATENCY_THRESHOLD_MS}ms threshold`;
+    } else {
+      const body = await res.json().catch(() => null);
+      if (!body || !body.active) {
+        success = false;
+        error = body ? `tenant status: ${body.status}` : "invalid response body";
+      } else if (responseTimeMs >= LATENCY_THRESHOLD_MS) {
+        success = false;
+        error = `latency ${responseTimeMs}ms exceeds ${LATENCY_THRESHOLD_MS}ms threshold`;
+      }
     }
 
     await saveMetric(client.clientId, responseTimeMs, statusCode, success, error);
-
     return { clientId: client.clientId, checkType: "firestore", success, responseTimeMs, statusCode, error };
   } catch (err) {
     const responseTimeMs = Math.round(performance.now() - start);
     const error = err instanceof Error ? err.message : String(err);
-
     await saveMetric(client.clientId, responseTimeMs, statusCode, false, error);
-
     return { clientId: client.clientId, checkType: "firestore", success: false, responseTimeMs, statusCode, error };
   }
 }

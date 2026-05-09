@@ -8,7 +8,7 @@ export const CLIENTS: MonitoredClient[] = [
     vercelProjectId: "prj_WPbUEboAIbVn9Z9Wazukaa9oV0pA",
     niche: "barberia",
     active: true,
-    checks: ["http"],
+    checks: ["http", "api", "firestore", "booking"],
   },
 ];
 
