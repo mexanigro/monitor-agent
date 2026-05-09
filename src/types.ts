@@ -5,6 +5,7 @@ export interface MonitoredClient {
   vercelProjectId: string;
   niche: string;
   active: boolean;
+  checks?: CheckType[];
 }
 
 export interface CheckResult {
