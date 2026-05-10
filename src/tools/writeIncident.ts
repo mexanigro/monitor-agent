@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { db } from "../db/client.js";
+import { sendIncidentEmail } from "../notifications.js";
 
 export const definition: Anthropic.Messages.Tool = {
   name: "writeIncident",
@@ -36,6 +37,17 @@ export async function execute(input: {
 
   const incident = rows[0] as { id: number; created_at: Date };
   console.log(`[incident] #${incident.id} created: ${input.severity} — ${input.clientId}/${input.checkType}`);
+
+  try {
+    await sendIncidentEmail(
+      input.clientId,
+      input.severity as "warning" | "critical",
+      input.checkType as import("../types.js").CheckType,
+      input.description,
+      input.claudeDiagnosis,
+      input.actionTaken,
+    );
+  } catch {}
 
   return { incidentId: incident.id, createdAt: incident.created_at };
 }

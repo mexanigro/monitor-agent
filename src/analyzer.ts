@@ -10,6 +10,7 @@ export async function analyzeClient(client: MonitoredClient, checkTypes: CheckTy
   for (const checkType of checkTypes) {
     try {
       await analyzeCheckType(client, checkType);
+      await tryAutoResolve(client.clientId, checkType);
     } catch (err) {
       console.error(`[analyzer] error analyzing ${client.clientId}/${checkType}:`, err);
     }
@@ -187,4 +188,35 @@ async function hasUnresolvedIncident(clientId: string, checkType: CheckType): Pr
     [clientId, checkType],
   );
   return rows.length > 0;
+}
+
+const RECOVERY_CHECKS_NEEDED = 3;
+
+async function tryAutoResolve(clientId: string, checkType: CheckType): Promise<void> {
+  const { rows: openIncidents } = await db.query(
+    `SELECT id, description, created_at FROM incidents WHERE client_id = $1 AND check_type = $2 AND resolved = FALSE`,
+    [clientId, checkType],
+  );
+
+  if (openIncidents.length === 0) return;
+
+  const recentMetrics = await getRecentMetrics(clientId, checkType, RECOVERY_CHECKS_NEEDED);
+  if (recentMetrics.length < RECOVERY_CHECKS_NEEDED) return;
+
+  const allHealthy = recentMetrics.every((m) => m.success);
+  if (!allHealthy) return;
+
+  for (const incident of openIncidents) {
+    const inc = incident as { id: number; description: string; created_at: Date };
+    await db.query(
+      `UPDATE incidents SET resolved = TRUE, resolved_at = NOW() WHERE id = $1`,
+      [inc.id],
+    );
+    console.log(`[analyzer] auto-resolved incident #${inc.id} (${clientId}/${checkType}) — ${RECOVERY_CHECKS_NEEDED} consecutive healthy checks`);
+
+    try {
+      const { sendResolvedEmail } = await import("./notifications.js");
+      await sendResolvedEmail(clientId, checkType, inc.description, inc.created_at);
+    } catch {}
+  }
 }
