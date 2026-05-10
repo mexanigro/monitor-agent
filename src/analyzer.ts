@@ -214,9 +214,5 @@ async function tryAutoResolve(clientId: string, checkType: CheckType): Promise<v
     );
     console.log(`[analyzer] auto-resolved incident #${inc.id} (${clientId}/${checkType}) — ${RECOVERY_CHECKS_NEEDED} consecutive healthy checks`);
 
-    try {
-      const { sendResolvedEmail } = await import("./notifications.js");
-      await sendResolvedEmail(clientId, checkType, inc.description, inc.created_at);
-    } catch {}
   }
 }

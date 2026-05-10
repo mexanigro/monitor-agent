@@ -44,6 +44,15 @@ export async function sendIncidentEmail(
   diagnosis: string,
   actionTaken: string,
 ): Promise<void> {
+  const needsManual = actionTaken.toLowerCase().includes("manual intervention")
+    || actionTaken.toLowerCase().includes("requires manual")
+    || actionTaken.toLowerCase().includes("could not resolve");
+
+  if (!needsManual) {
+    console.log(`[notify] skipping email — Claude handled it: ${actionTaken}`);
+    return;
+  }
+
   const isCritical = severity === "critical";
   const emoji = isCritical ? "🚨" : "⚠️";
   const color = isCritical ? "#dc2626" : "#f59e0b";
