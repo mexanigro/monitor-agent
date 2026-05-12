@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "diagnose": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/diagnose/SKILL.md",
+      "computedHash": "1c3c85517ac42116fe5f2bfb5150f7b3e38ad23808e40b33fbb01f1afb611983"
+    },
+    "git-guardrails": {
+      "source": "dedalus-erp-pas/foundation-skills",
+      "sourceType": "github",
+      "skillPath": "skills/git-guardrails/SKILL.md",
+      "computedHash": "a66d4ec101fd2203cd7acfecb382f22ef5abb2758267eead7158dea87f6d5252"
+    }
+  }
+}
