@@ -20,7 +20,10 @@ export async function getActiveClients(): Promise<MonitoredClient[]> {
   const clients: MonitoredClient[] = [];
   for (const doc of snap.docs) {
     const d = doc.data();
-    if (!d.clientId || !d.deployUrl) continue;
+    if (!d.clientId || !d.deployUrl) {
+      console.warn(`[clients] skipping doc ${doc.id}: missing clientId=${!!d.clientId} deployUrl=${!!d.deployUrl}`);
+      continue;
+    }
     clients.push({
       clientId: d.clientId as string,
       name: (d.businessName as string) || d.clientId,

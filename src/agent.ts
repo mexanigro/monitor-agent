@@ -79,7 +79,7 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
     return;
   }
 
-  const cooldownKey = anomaly.clientId;
+  const cooldownKey = `${anomaly.clientId}:${anomaly.checkType}`;
   const lastRun = lastAgentRun.get(cooldownKey) ?? 0;
   if (Date.now() - lastRun < COOLDOWN_MS) {
     console.log(`[agent] skipping ${anomaly.clientId} — cooldown active (last run ${Math.round((Date.now() - lastRun) / 1000)}s ago)`);
@@ -109,13 +109,24 @@ async function runAgentInner(client: MonitoredClient, anomaly: Anomaly, metrics:
   ];
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-      tools,
-      messages,
-    });
+    let response: Anthropic.Messages.Message | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 2048,
+          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+          tools,
+          messages,
+        });
+        break;
+      } catch (err) {
+        if (attempt === 1) throw err;
+        console.warn(`[agent] API call failed (attempt ${attempt + 1}/2), retrying in 5s:`, err instanceof Error ? err.message : err);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+    if (!response) throw new Error("unreachable: API call failed without throwing");
 
     messages.push({ role: "assistant", content: response.content });
 

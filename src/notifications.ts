@@ -4,6 +4,10 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || "liam.arzac@gmail.com";
 const FROM_EMAIL = process.env.FROM_EMAIL || "Nichos Monitor <onboarding@resend.dev>";
 
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 const MAX_EMAILS_PER_HOUR = 5;
 const DEDUP_WINDOW_MS = 60 * 60_000;
 
@@ -19,8 +23,12 @@ function isRateLimited(): boolean {
 }
 
 function isDuplicate(dedupKey: string): boolean {
+  const now = Date.now();
+  for (const [key, ts] of recentlySent) {
+    if (now - ts >= DEDUP_WINDOW_MS) recentlySent.delete(key);
+  }
   const lastSent = recentlySent.get(dedupKey);
-  if (lastSent && Date.now() - lastSent < DEDUP_WINDOW_MS) return true;
+  if (lastSent && now - lastSent < DEDUP_WINDOW_MS) return true;
   return false;
 }
 
@@ -81,12 +89,14 @@ export async function sendIncidentEmail(
   diagnosis: string,
   actionTaken: string,
 ): Promise<void> {
-  const needsManual = actionTaken.toLowerCase().includes("manual intervention")
-    || actionTaken.toLowerCase().includes("requires manual")
-    || actionTaken.toLowerCase().includes("could not resolve");
+  const action = actionTaken.toLowerCase();
+  const autoResolved = action.includes("redeployed")
+    || action.includes("redeploy triggered")
+    || action.includes("resolved automatically")
+    || action.includes("no action needed");
 
-  if (!needsManual) {
-    console.log(`[notify] skipping email — Claude handled it: ${actionTaken}`);
+  if (autoResolved) {
+    console.log(`[notify] skipping email — Claude auto-resolved: ${actionTaken}`);
     return;
   }
 
@@ -100,18 +110,18 @@ export async function sendIncidentEmail(
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background: ${color}; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
-        <h2 style="margin: 0;">${emoji} ${label} — ${checkType}</h2>
-        <p style="margin: 4px 0 0; opacity: 0.9;">${clientId}</p>
+        <h2 style="margin: 0;">${emoji} ${label} — ${escapeHtml(checkType)}</h2>
+        <p style="margin: 4px 0 0; opacity: 0.9;">${escapeHtml(clientId)}</p>
       </div>
       <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
         <h3 style="margin: 0 0 8px; color: #374151;">Problema</h3>
-        <p style="margin: 0 0 16px; color: #6b7280;">${description}</p>
+        <p style="margin: 0 0 16px; color: #6b7280;">${escapeHtml(description)}</p>
 
         <h3 style="margin: 0 0 8px; color: #374151;">Diagnóstico (Claude)</h3>
-        <p style="margin: 0 0 16px; color: #6b7280;">${diagnosis}</p>
+        <p style="margin: 0 0 16px; color: #6b7280;">${escapeHtml(diagnosis)}</p>
 
         <h3 style="margin: 0 0 8px; color: #374151;">Acción tomada</h3>
-        <p style="margin: 0 0 16px; color: #6b7280;">${actionTaken}</p>
+        <p style="margin: 0 0 16px; color: #6b7280;">${escapeHtml(actionTaken)}</p>
 
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="margin: 0; font-size: 12px; color: #9ca3af;">Monitor Agent — Nichos Hub</p>
@@ -136,11 +146,11 @@ export async function sendResolvedEmail(
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background: #16a34a; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
         <h2 style="margin: 0;">✅ Incidente resuelto</h2>
-        <p style="margin: 4px 0 0; opacity: 0.9;">${clientId} — ${checkType}</p>
+        <p style="margin: 4px 0 0; opacity: 0.9;">${escapeHtml(clientId)} — ${escapeHtml(checkType)}</p>
       </div>
       <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
         <h3 style="margin: 0 0 8px; color: #374151;">Problema original</h3>
-        <p style="margin: 0 0 16px; color: #6b7280;">${originalDescription}</p>
+        <p style="margin: 0 0 16px; color: #6b7280;">${escapeHtml(originalDescription)}</p>
 
         <h3 style="margin: 0 0 8px; color: #374151;">Duración</h3>
         <p style="margin: 0 0 16px; color: #6b7280;">${duration}</p>

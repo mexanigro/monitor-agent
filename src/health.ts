@@ -12,7 +12,8 @@ const state = {
   slow: null as RoundStats | null,
 };
 
-const STALE_THRESHOLD_MS = 15 * 60_000;
+const FAST_STALE_MS = 15 * 60_000;
+const SLOW_STALE_MS = 45 * 60_000;
 
 export function reportRound(name: "fast" | "slow", durationMs: number, clientCount: number): void {
   state[name] = { completedAt: Date.now(), durationMs, clientCount };
@@ -22,11 +23,10 @@ function isHealthy(): boolean {
   const now = Date.now();
   const uptime = now - state.startedAt;
 
-  // Give it 10 minutes to complete the first round after startup
   if (uptime < 10 * 60_000) return true;
 
-  // After warmup, fast round must have completed within the threshold
-  if (!state.fast || now - state.fast.completedAt > STALE_THRESHOLD_MS) return false;
+  if (!state.fast || now - state.fast.completedAt > FAST_STALE_MS) return false;
+  if (state.slow && now - state.slow.completedAt > SLOW_STALE_MS) return false;
 
   return true;
 }
