@@ -47,7 +47,9 @@ export async function execute(input: {
       input.claudeDiagnosis,
       input.actionTaken,
     );
-  } catch {}
+  } catch (err) {
+    console.error(`[writeIncident] email notification failed for incident #${incident.id}:`, err);
+  }
 
   return { incidentId: incident.id, createdAt: incident.created_at };
 }

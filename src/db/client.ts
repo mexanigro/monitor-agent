@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 5,
+  max: 20,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });
@@ -31,6 +31,14 @@ export const db = {
   async initSchema(): Promise<void> {
     const sql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
     await pool.query(sql);
+  },
+
+  async pruneOldMetrics(retentionDays = 30): Promise<number> {
+    const result = await pool.query(
+      `DELETE FROM metrics WHERE checked_at < NOW() - INTERVAL '1 day' * $1`,
+      [retentionDays],
+    );
+    return result.rowCount ?? 0;
   },
 
   async end(): Promise<void> {

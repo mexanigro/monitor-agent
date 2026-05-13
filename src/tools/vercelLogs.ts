@@ -16,8 +16,8 @@ export const definition: Anthropic.Messages.Tool = {
 };
 
 export async function execute(input: { projectId: string }): Promise<unknown> {
-  const token = process.env.VERCEL_API_TOKEN;
-  if (!token) return { error: "VERCEL_API_TOKEN not configured" };
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) return { error: "VERCEL_TOKEN not configured" };
 
   const headers = { Authorization: `Bearer ${token}` };
 

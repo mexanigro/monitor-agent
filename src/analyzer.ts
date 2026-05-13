@@ -1,5 +1,6 @@
 import { db } from "./db/client.js";
 import { runAgent } from "./agent.js";
+import { sendResolvedEmail } from "./notifications.js";
 import type { Anomaly, BaselineRow, CheckType, MetricRow, MonitoredClient } from "./types.js";
 
 const MIN_CHECKS_FOR_BASELINE = 10;
@@ -75,19 +76,20 @@ function detectAnomalies(
         severity: "critical",
         description: `response time ${latest.response_time_ms}ms is >3x p95 baseline (${baseline.p95_response_time_ms}ms)`,
       });
-    }
-
-    const last3 = metrics.slice(0, 3);
-    if (
-      last3.length === 3 &&
-      last3.every((m) => m.response_time_ms !== null && m.response_time_ms > baseline.p95_response_time_ms * 1.5)
-    ) {
-      anomalies.push({
-        clientId,
-        checkType,
-        severity: "warning",
-        description: `response time exceeded 1.5x p95 baseline for 3 consecutive checks`,
-      });
+    } else {
+      // Only check sustained warning if not already critical
+      const last3 = metrics.slice(0, 3);
+      if (
+        last3.length === 3 &&
+        last3.every((m) => m.response_time_ms !== null && m.response_time_ms > baseline.p95_response_time_ms * 1.5)
+      ) {
+        anomalies.push({
+          clientId,
+          checkType,
+          severity: "warning",
+          description: `response time exceeded 1.5x p95 baseline for 3 consecutive checks`,
+        });
+      }
     }
   }
 
@@ -214,5 +216,10 @@ async function tryAutoResolve(clientId: string, checkType: CheckType): Promise<v
     );
     console.log(`[analyzer] auto-resolved incident #${inc.id} (${clientId}/${checkType}) — ${RECOVERY_CHECKS_NEEDED} consecutive healthy checks`);
 
+    try {
+      await sendResolvedEmail(clientId, checkType, inc.description, inc.created_at);
+    } catch (err) {
+      console.error(`[analyzer] failed to send resolved email for incident #${inc.id}:`, err);
+    }
   }
 }

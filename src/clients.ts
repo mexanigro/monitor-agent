@@ -1,17 +1,44 @@
-import type { MonitoredClient } from "./types.js";
+import { getDb } from "./firestore.js";
+import type { MonitoredClient, CheckType } from "./types.js";
 
-export const CLIENTS: MonitoredClient[] = [
-  {
-    clientId: "client_barber_01",
-    name: "Barber he Studio",
-    url: "https://barber-shop-template-ten.vercel.app",
-    vercelProjectId: "prj_WPbUEboAIbVn9Z9Wazukaa9oV0pA",
-    niche: "barberia",
-    active: true,
-    checks: ["http", "api", "firestore", "booking"],
-  },
-];
+const CACHE_TTL_MS = 5 * 60_000;
+const ALL_CHECKS: CheckType[] = ["http", "api", "firestore", "booking"];
 
-export function getActiveClients(): MonitoredClient[] {
-  return CLIENTS.filter((c) => c.active);
+let cached: MonitoredClient[] | null = null;
+let cachedAt = 0;
+
+export async function getActiveClients(): Promise<MonitoredClient[]> {
+  const now = Date.now();
+  if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
+
+  const db = getDb();
+  const snap = await db
+    .collection("hub_clients")
+    .where("status", "==", "active")
+    .get();
+
+  const clients: MonitoredClient[] = [];
+  for (const doc of snap.docs) {
+    const d = doc.data();
+    if (!d.clientId || !d.deployUrl) continue;
+    clients.push({
+      clientId: d.clientId as string,
+      name: (d.businessName as string) || d.clientId,
+      url: d.deployUrl as string,
+      vercelProjectId: (d.vercelProjectId as string) || "",
+      niche: (d.niche as string) || "",
+      active: true,
+      checks: (d.monitorChecks as CheckType[]) ?? ALL_CHECKS,
+    });
+  }
+
+  cached = clients;
+  cachedAt = now;
+  console.log(`[clients] loaded ${clients.length} active client(s) from Firestore`);
+  return clients;
+}
+
+export function invalidateClientCache(): void {
+  cached = null;
+  cachedAt = 0;
 }

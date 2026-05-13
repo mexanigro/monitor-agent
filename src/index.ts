@@ -1,5 +1,6 @@
 import { db } from "./db/client.js";
 import { startScheduler } from "./scheduler.js";
+import { startHealthServer } from "./health.js";
 
 async function main(): Promise<void> {
   const dbOk = await db.healthCheck();
@@ -13,6 +14,9 @@ async function main(): Promise<void> {
   console.log("[monitor] schema initialized");
 
   startScheduler();
+
+  const port = parseInt(process.env.PORT || "8080", 10);
+  startHealthServer(port);
 }
 
 async function shutdown(signal: string): Promise<void> {

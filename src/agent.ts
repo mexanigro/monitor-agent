@@ -6,6 +6,11 @@ import { definition as vercelRedeployDef, execute as vercelRedeployExec } from "
 import { definition as writeIncidentDef, execute as writeIncidentExec } from "./tools/writeIncident.js";
 
 const MAX_TURNS = 5;
+const MAX_CONCURRENT_AGENTS = 3;
+const COOLDOWN_MS = 10 * 60_000;
+
+let activeAgents = 0;
+const lastAgentRun = new Map<string, number>();
 
 const anthropic = new Anthropic();
 
@@ -74,6 +79,29 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
     return;
   }
 
+  const cooldownKey = anomaly.clientId;
+  const lastRun = lastAgentRun.get(cooldownKey) ?? 0;
+  if (Date.now() - lastRun < COOLDOWN_MS) {
+    console.log(`[agent] skipping ${anomaly.clientId} — cooldown active (last run ${Math.round((Date.now() - lastRun) / 1000)}s ago)`);
+    return;
+  }
+
+  if (activeAgents >= MAX_CONCURRENT_AGENTS) {
+    console.warn(`[agent] skipping ${anomaly.clientId} — ${activeAgents}/${MAX_CONCURRENT_AGENTS} agents already running`);
+    return;
+  }
+
+  activeAgents++;
+  lastAgentRun.set(cooldownKey, Date.now());
+
+  try {
+    await runAgentInner(client, anomaly, metrics, baseline);
+  } finally {
+    activeAgents--;
+  }
+}
+
+async function runAgentInner(client: MonitoredClient, anomaly: Anomaly, metrics: MetricRow[], baseline: BaselineRow): Promise<void> {
   console.log(`[agent] starting diagnosis for ${anomaly.clientId}/${anomaly.checkType} (${anomaly.severity})`);
 
   const messages: Anthropic.Messages.MessageParam[] = [

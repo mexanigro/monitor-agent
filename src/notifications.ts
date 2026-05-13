@@ -4,35 +4,72 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || "liam.arzac@gmail.com";
 const FROM_EMAIL = process.env.FROM_EMAIL || "Nichos Monitor <onboarding@resend.dev>";
 
-async function sendEmail(subject: string, html: string): Promise<void> {
+const MAX_EMAILS_PER_HOUR = 5;
+const DEDUP_WINDOW_MS = 60 * 60_000;
+
+const sentTimestamps: number[] = [];
+const recentlySent = new Map<string, number>();
+
+function isRateLimited(): boolean {
+  const now = Date.now();
+  while (sentTimestamps.length > 0 && now - sentTimestamps[0] > DEDUP_WINDOW_MS) {
+    sentTimestamps.shift();
+  }
+  return sentTimestamps.length >= MAX_EMAILS_PER_HOUR;
+}
+
+function isDuplicate(dedupKey: string): boolean {
+  const lastSent = recentlySent.get(dedupKey);
+  if (lastSent && Date.now() - lastSent < DEDUP_WINDOW_MS) return true;
+  return false;
+}
+
+async function sendEmail(subject: string, html: string, dedupKey?: string): Promise<void> {
   if (!RESEND_API_KEY) {
     console.warn("[notify] RESEND_API_KEY not set — skipping email");
     return;
   }
 
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to: [NOTIFY_EMAIL],
-        subject,
-        html,
-      }),
-    });
+  if (dedupKey && isDuplicate(dedupKey)) {
+    console.log(`[notify] skipping duplicate email for ${dedupKey}`);
+    return;
+  }
 
-    if (!res.ok) {
+  if (isRateLimited()) {
+    console.warn(`[notify] rate limited (${MAX_EMAILS_PER_HOUR}/hour) — skipping: ${subject}`);
+    return;
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: FROM_EMAIL,
+          to: [NOTIFY_EMAIL],
+          subject,
+          html,
+        }),
+      });
+
+      if (res.ok) {
+        sentTimestamps.push(Date.now());
+        if (dedupKey) recentlySent.set(dedupKey, Date.now());
+        console.log(`[notify] email sent: ${subject}`);
+        return;
+      }
+
       const body = await res.text();
-      console.error(`[notify] Resend API error ${res.status}: ${body}`);
-    } else {
-      console.log(`[notify] email sent: ${subject}`);
+      console.error(`[notify] Resend API error ${res.status} (attempt ${attempt + 1}/2): ${body}`);
+    } catch (err) {
+      console.error(`[notify] send failed (attempt ${attempt + 1}/2):`, err);
     }
-  } catch (err) {
-    console.error("[notify] failed to send email:", err);
+
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 3000));
   }
 }
 
@@ -82,7 +119,7 @@ export async function sendIncidentEmail(
     </div>
   `;
 
-  await sendEmail(subject, html);
+  await sendEmail(subject, html, `${clientId}:${checkType}`);
 }
 
 export async function sendResolvedEmail(
