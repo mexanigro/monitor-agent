@@ -1,48 +1,30 @@
 import { db } from "../db/client.js";
+import { fetchWithRetry } from "./retry.js";
 import type { CheckResult, MonitoredClient } from "../types.js";
 
 const TIMEOUT_MS = 10_000;
 
 export async function httpCheck(client: MonitoredClient): Promise<CheckResult> {
-  const start = performance.now();
-  let statusCode: number | undefined;
+  const { response: res, responseTimeMs, statusCode, error: fetchError } = await fetchWithRetry(
+    client.url,
+    { method: "GET", redirect: "follow" },
+    "httpCheck",
+    TIMEOUT_MS,
+  );
 
-  try {
-    const res = await fetch(client.url, {
-      method: "GET",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: "follow",
-    });
+  const success = res?.ok ?? false;
+  const error = fetchError ?? (success ? undefined : `HTTP ${statusCode}`);
 
-    statusCode = res.status;
-    const responseTimeMs = Math.round(performance.now() - start);
-    const success = res.ok;
+  await saveMetric(client.clientId, responseTimeMs, statusCode, success, error ?? undefined);
 
-    await saveMetric(client.clientId, responseTimeMs, statusCode, success);
-
-    return {
-      clientId: client.clientId,
-      checkType: "http",
-      success,
-      responseTimeMs,
-      statusCode,
-      error: success ? undefined : `HTTP ${statusCode}`,
-    };
-  } catch (err) {
-    const responseTimeMs = Math.round(performance.now() - start);
-    const error = err instanceof Error ? err.message : String(err);
-
-    await saveMetric(client.clientId, responseTimeMs, statusCode, false, error);
-
-    return {
-      clientId: client.clientId,
-      checkType: "http",
-      success: false,
-      responseTimeMs,
-      statusCode,
-      error,
-    };
-  }
+  return {
+    clientId: client.clientId,
+    checkType: "http",
+    success,
+    responseTimeMs,
+    statusCode,
+    error: error ?? undefined,
+  };
 }
 
 async function saveMetric(

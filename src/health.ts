@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { db } from "./db/client.js";
 
 interface RoundStats {
   completedAt: number;
@@ -31,22 +32,51 @@ function isHealthy(): boolean {
   return true;
 }
 
-export function startHealthServer(port = 8080): void {
-  const server = createServer((_req, res) => {
-    const healthy = isHealthy();
-    const body = JSON.stringify({
-      status: healthy ? "healthy" : "unhealthy",
-      uptime: Math.round((Date.now() - state.startedAt) / 1000),
-      fast: state.fast
-        ? { agoSec: Math.round((Date.now() - state.fast.completedAt) / 1000), durationMs: state.fast.durationMs, clients: state.fast.clientCount }
-        : null,
-      slow: state.slow
-        ? { agoSec: Math.round((Date.now() - state.slow.completedAt) / 1000), durationMs: state.slow.durationMs, clients: state.slow.clientCount }
-        : null,
-    });
+async function getActiveIncidents(): Promise<number> {
+  try {
+    const { rows } = await db.query<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM incidents WHERE resolved = FALSE",
+    );
+    return rows[0]?.count ?? 0;
+  } catch {
+    return 0;
+  }
+}
 
-    res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
-    res.end(body);
+export function startHealthServer(port = 8080): void {
+  const server = createServer(async (_req, res) => {
+    try {
+      const now = Date.now();
+      const healthy = isHealthy();
+      const activeIncidents = await getActiveIncidents();
+
+      const lastCheckTs = Math.max(
+        state.fast?.completedAt ?? 0,
+        state.slow?.completedAt ?? 0,
+      );
+
+      const body = JSON.stringify({
+        status: healthy ? "healthy" : "unhealthy",
+        uptime: Math.round((now - state.startedAt) / 1000),
+        monitoredClients: state.fast?.clientCount ?? state.slow?.clientCount ?? 0,
+        activeIncidents,
+        lastCheck: lastCheckTs > 0 ? new Date(lastCheckTs).toISOString() : null,
+        lastCheckAgoSec: lastCheckTs > 0 ? Math.round((now - lastCheckTs) / 1000) : null,
+        fast: state.fast
+          ? { agoSec: Math.round((now - state.fast.completedAt) / 1000), durationMs: state.fast.durationMs, clients: state.fast.clientCount }
+          : null,
+        slow: state.slow
+          ? { agoSec: Math.round((now - state.slow.completedAt) / 1000), durationMs: state.slow.durationMs, clients: state.slow.clientCount }
+          : null,
+      });
+
+      res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
+      res.end(body);
+    } catch (err) {
+      console.error("[health] handler error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error" }));
+    }
   });
 
   server.listen(port, () => {

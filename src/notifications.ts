@@ -4,6 +4,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || "liam.arzac@gmail.com";
 const FROM_EMAIL = process.env.FROM_EMAIL || "Nichos Monitor <onboarding@resend.dev>";
 
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886";
+const NOTIFY_WHATSAPP = process.env.NOTIFY_WHATSAPP || "whatsapp:+9720557719141";
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -24,7 +29,6 @@ function isRateLimited(): boolean {
 
 function isDuplicate(dedupKey: string): boolean {
   const now = Date.now();
-  // Purge all expired entries to prevent unbounded growth in long-running processes
   if (recentlySent.size > 50) {
     for (const [key, ts] of recentlySent) {
       if (now - ts >= DEDUP_WINDOW_MS) recentlySent.delete(key);
@@ -33,6 +37,47 @@ function isDuplicate(dedupKey: string): boolean {
   const lastSent = recentlySent.get(dedupKey);
   if (lastSent && now - lastSent < DEDUP_WINDOW_MS) return true;
   return false;
+}
+
+async function sendWhatsApp(message: string, dedupKey?: string): Promise<void> {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+    console.warn("[notify] TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN not set — skipping WhatsApp");
+    return;
+  }
+
+  const waKey = dedupKey ? `wa:${dedupKey}` : undefined;
+  if (waKey && isDuplicate(waKey)) {
+    console.log(`[notify] skipping duplicate WhatsApp for ${dedupKey}`);
+    return;
+  }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+  const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        From: TWILIO_WHATSAPP_FROM,
+        To: NOTIFY_WHATSAPP,
+        Body: message,
+      }).toString(),
+    });
+
+    if (res.ok) {
+      if (waKey) recentlySent.set(waKey, Date.now());
+      console.log(`[notify] WhatsApp sent to ${NOTIFY_WHATSAPP}`);
+    } else {
+      const body = await res.text();
+      console.error(`[notify] Twilio error ${res.status}: ${body}`);
+    }
+  } catch (err) {
+    console.error("[notify] WhatsApp send failed:", err);
+  }
 }
 
 async function sendEmail(subject: string, html: string, dedupKey?: string): Promise<void> {
@@ -99,7 +144,7 @@ export async function sendIncidentEmail(
     || action.includes("no action needed");
 
   if (autoResolved) {
-    console.log(`[notify] skipping email — Claude auto-resolved: ${actionTaken}`);
+    console.log(`[notify] skipping notifications — Claude auto-resolved: ${actionTaken}`);
     return;
   }
 
@@ -109,6 +154,12 @@ export async function sendIncidentEmail(
   const label = isCritical ? "CRITICAL" : "WARNING";
 
   const subject = `${emoji} ${label}: ${clientId} — ${checkType}`;
+  const dedupKey = `${clientId}:${checkType}`;
+
+  if (isCritical) {
+    const waMessage = `${emoji} *${label}*: ${clientId} — ${checkType}\n\n*Problema:* ${description}\n*Acción:* ${actionTaken}`;
+    await sendWhatsApp(waMessage, dedupKey);
+  }
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
@@ -132,7 +183,7 @@ export async function sendIncidentEmail(
     </div>
   `;
 
-  await sendEmail(subject, html, `${clientId}:${checkType}`);
+  await sendEmail(subject, html, dedupKey);
 }
 
 export async function sendResolvedEmail(
