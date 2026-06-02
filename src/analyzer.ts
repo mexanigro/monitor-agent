@@ -1,5 +1,6 @@
 import { db } from "./db/client.js";
 import { runAgent } from "./agent.js";
+import { execute as writeIncidentExec } from "./tools/writeIncident.js";
 import { sendResolvedEmail } from "./notifications.js";
 import type { Anomaly, BaselineRow, CheckType, MetricRow, MonitoredClient } from "./types.js";
 
@@ -47,6 +48,19 @@ async function analyzeCheckType(client: MonitoredClient, checkType: CheckType): 
   );
 
   console.log(`[analyzer] anomaly detected: ${worst.severity} — ${clientId}/${checkType}: ${worst.description}`);
+
+  if (worst.severity !== "critical") {
+    await writeIncidentExec({
+      clientId: client.clientId,
+      severity: worst.severity,
+      checkType,
+      description: worst.description,
+      claudeDiagnosis: "Registrado automáticamente — diagnóstico IA solo para incidentes críticos",
+      actionTaken: "requires manual review",
+    });
+    return;
+  }
+
   await runAgent(client, worst, metrics, baseline);
 }
 
@@ -162,7 +176,15 @@ async function computeAndSaveBaseline(clientId: string, checkType: CheckType): P
     [clientId, checkType],
   );
 
-  const stats = rows[0] as { avg_response_time_ms: number; p95_response_time_ms: number; success_rate: number };
+  const raw = rows[0] as { avg_response_time_ms: number; p95_response_time_ms: number; success_rate: number };
+
+  const fallbackP95: Record<CheckType, number> = {
+    http: 3000, api: 5000, firestore: 8000, booking: 10000,
+  };
+  const stats = {
+    ...raw,
+    p95_response_time_ms: raw.p95_response_time_ms || fallbackP95[checkType],
+  };
 
   await db.query(
     `INSERT INTO baselines (client_id, check_type, avg_response_time_ms, p95_response_time_ms, success_rate)

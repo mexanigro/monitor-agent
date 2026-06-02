@@ -5,14 +5,29 @@ import { definition as vercelLogsDef, execute as vercelLogsExec } from "./tools/
 import { definition as vercelRedeployDef, execute as vercelRedeployExec } from "./tools/vercelRedeploy.js";
 import { definition as writeIncidentDef, execute as writeIncidentExec } from "./tools/writeIncident.js";
 
+const AGENT_MODEL = process.env.MONITOR_AGENT_MODEL ?? "claude-haiku-4-5-20251001";
 const MAX_TURNS = 5;
 const MAX_CONCURRENT_AGENTS = 3;
 const COOLDOWN_MS = 10 * 60_000;
+const MAX_AGENT_INVOCATIONS_PER_HOUR = parseInt(process.env.MONITOR_AGENT_MAX_PER_HOUR ?? "10", 10);
 
 let activeAgents = 0;
 const lastAgentRun = new Map<string, number>();
+const agentInvocationTimestamps: number[] = [];
 
-const anthropic = new Anthropic();
+let _anthropic: Anthropic | null = null;
+function getAnthropic(): Anthropic {
+  if (!_anthropic) _anthropic = new Anthropic();
+  return _anthropic;
+}
+
+function isGlobalCapReached(): boolean {
+  const now = Date.now();
+  while (agentInvocationTimestamps.length > 0 && now - agentInvocationTimestamps[0] > 3_600_000) {
+    agentInvocationTimestamps.shift();
+  }
+  return agentInvocationTimestamps.length >= MAX_AGENT_INVOCATIONS_PER_HOUR;
+}
 
 const tools: Anthropic.Messages.Tool[] = [
   getMetricsHistoryDef,
@@ -74,6 +89,11 @@ function buildUserMessage(client: MonitoredClient, anomaly: Anomaly, metrics: Me
 }
 
 export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metrics: MetricRow[], baseline: BaselineRow): Promise<void> {
+  if (process.env.MONITOR_AGENT_ENABLED === "false") {
+    console.log("[agent] disabled via env — skipping");
+    return;
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error("[agent] ANTHROPIC_API_KEY not configured — skipping agent");
     return;
@@ -86,6 +106,19 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
     return;
   }
 
+  if (isGlobalCapReached()) {
+    console.warn(`[agent] global cap reached (${MAX_AGENT_INVOCATIONS_PER_HOUR}/hour) — logging incident without AI for ${anomaly.clientId}`);
+    await writeIncidentExec({
+      clientId: anomaly.clientId,
+      severity: anomaly.severity,
+      checkType: anomaly.checkType,
+      description: anomaly.description,
+      claudeDiagnosis: "Cap de invocaciones alcanzado — revisar manualmente",
+      actionTaken: "requires manual intervention",
+    });
+    return;
+  }
+
   if (activeAgents >= MAX_CONCURRENT_AGENTS) {
     console.warn(`[agent] skipping ${anomaly.clientId} — ${activeAgents}/${MAX_CONCURRENT_AGENTS} agents already running`);
     return;
@@ -93,6 +126,7 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
 
   activeAgents++;
   lastAgentRun.set(cooldownKey, Date.now());
+  agentInvocationTimestamps.push(Date.now());
 
   try {
     await runAgentInner(client, anomaly, metrics, baseline);
@@ -112,8 +146,8 @@ async function runAgentInner(client: MonitoredClient, anomaly: Anomaly, metrics:
     let response: Anthropic.Messages.Message | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        response = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
+        response = await getAnthropic().messages.create({
+          model: AGENT_MODEL,
           max_tokens: 2048,
           system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
           tools,

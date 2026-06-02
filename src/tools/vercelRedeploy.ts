@@ -58,7 +58,8 @@ export async function execute(input: { projectId: string; reason: string }): Pro
 
   if (!redeployRes.ok) {
     const body = await redeployRes.text();
-    return { error: `redeploy failed: HTTP ${redeployRes.status} — ${body}` };
+    console.error(`[vercelRedeploy] failed ${redeployRes.status} for ${input.projectId}: ${body}`);
+    return { error: `redeploy failed: HTTP ${redeployRes.status}`, detail: body };
   }
 
   const result = (await redeployRes.json()) as { id: string; url: string; readyState: string };

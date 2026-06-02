@@ -9,38 +9,30 @@ interface StepResult {
   statusCode?: number;
   timeMs: number;
   error?: string;
+  body?: unknown;
 }
 
 export async function bookingCheck(client: MonitoredClient): Promise<CheckResult> {
   const totalStart = performance.now();
   const steps: StepResult[] = [];
 
-  const stepsToRun: Array<{ step: string; run: () => Promise<StepResult> }> = [
-    { step: "get-services", run: () => fetchStep("get-services", `${client.url}/api/services`) },
-    { step: "get-availability", run: () => fetchStep("get-availability", `${client.url}/api/availability`, {
+  const servicesResult = await fetchStep("get-services", `${client.url}/api/services`, undefined, true);
+  steps.push(servicesResult);
+
+  if (servicesResult.ok) {
+    let serviceId = "test";
+    const body = servicesResult.body;
+    const services = Array.isArray(body) ? body : (body as Record<string, unknown>)?.services;
+    if (Array.isArray(services) && services.length > 0) {
+      serviceId = (services[0].id ?? services[0].serviceId ?? "test") as string;
+    }
+
+    const availResult = await fetchStep("get-availability", `${client.url}/api/availability`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date: getTomorrowDate(), serviceId: "test", _monitor_test: true }),
-    })},
-    { step: "validate-booking", run: () => fetchStep("validate-booking", `${client.url}/api/bookings/validate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        serviceId: "test",
-        date: getTomorrowDate(),
-        time: "10:00",
-        clientName: "Monitor Agent",
-        clientPhone: "+0000000000",
-        _monitor_test: true,
-      }),
-    })},
-  ];
-
-  for (const { run } of stepsToRun) {
-    const result = await run();
-    steps.push(result);
-
-    if (!result.ok) break;
+      body: JSON.stringify({ date: getTomorrowDate(), serviceId }),
+    });
+    steps.push(availResult);
   }
 
   const responseTimeMs = Math.round(performance.now() - totalStart);
@@ -67,6 +59,7 @@ async function fetchStep(
   step: string,
   url: string,
   init?: RequestInit,
+  parseBody = false,
 ): Promise<StepResult> {
   const start = performance.now();
   try {
@@ -75,12 +68,17 @@ async function fetchStep(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const timeMs = Math.round(performance.now() - start);
+    let body: unknown;
+    if (parseBody && res.ok) {
+      try { body = await res.json(); } catch { /* ignore parse errors */ }
+    }
     return {
       step,
       ok: res.ok,
       statusCode: res.status,
       timeMs,
       error: res.ok ? undefined : `HTTP ${res.status}`,
+      body,
     };
   } catch (err) {
     return {

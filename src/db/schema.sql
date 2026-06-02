@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   claude_diagnosis TEXT,
   action_taken TEXT,
   resolved BOOLEAN DEFAULT FALSE,
+  notification_sent_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   resolved_at TIMESTAMPTZ
 );
@@ -35,6 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_incidents_client
 CREATE INDEX IF NOT EXISTS idx_incidents_unresolved
   ON incidents (resolved, created_at DESC)
   WHERE resolved = FALSE;
+
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS notification_sent_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS baselines (
   client_id VARCHAR(100) NOT NULL,

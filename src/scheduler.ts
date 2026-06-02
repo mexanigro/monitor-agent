@@ -10,7 +10,7 @@ import type { MonitoredClient, CheckResult, CheckType } from "./types.js";
 
 const FAST_INTERVAL_MS = 5 * 60_000;
 const SLOW_INTERVAL_MS = 30 * 60_000;
-const CONCURRENCY = 10;
+const CONCURRENCY = parseInt(process.env.MONITOR_CONCURRENCY ?? "10", 10);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,15 +35,8 @@ async function runConcurrent<T>(
 }
 
 async function loop(name: "fast" | "slow", intervalMs: number, fn: () => Promise<number>): Promise<never> {
-  let running = false;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if (running) {
-      console.warn(`[scheduler:${name}] previous round still running — skipping`);
-      await sleep(intervalMs);
-      continue;
-    }
-    running = true;
     const start = Date.now();
     let clientCount = 0;
     try {
@@ -52,7 +45,6 @@ async function loop(name: "fast" | "slow", intervalMs: number, fn: () => Promise
       console.error(`[scheduler:${name}] error:`, err);
     }
     const elapsed = Date.now() - start;
-    running = false;
     reportRound(name, elapsed, clientCount);
     console.log(`[scheduler:${name}] round completed in ${(elapsed / 1000).toFixed(1)}s`);
     const wait = Math.max(0, intervalMs - elapsed);

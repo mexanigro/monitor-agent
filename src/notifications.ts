@@ -24,8 +24,11 @@ function isRateLimited(): boolean {
 
 function isDuplicate(dedupKey: string): boolean {
   const now = Date.now();
-  for (const [key, ts] of recentlySent) {
-    if (now - ts >= DEDUP_WINDOW_MS) recentlySent.delete(key);
+  // Purge all expired entries to prevent unbounded growth in long-running processes
+  if (recentlySent.size > 50) {
+    for (const [key, ts] of recentlySent) {
+      if (now - ts >= DEDUP_WINDOW_MS) recentlySent.delete(key);
+    }
   }
   const lastSent = recentlySent.get(dedupKey);
   if (lastSent && now - lastSent < DEDUP_WINDOW_MS) return true;

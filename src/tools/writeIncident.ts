@@ -38,17 +38,33 @@ export async function execute(input: {
   const incident = rows[0] as { id: number; created_at: Date };
   console.log(`[incident] #${incident.id} created: ${input.severity} — ${input.clientId}/${input.checkType}`);
 
-  try {
-    await sendIncidentEmail(
-      input.clientId,
-      input.severity as "warning" | "critical",
-      input.checkType as import("../types.js").CheckType,
-      input.description,
-      input.claudeDiagnosis,
-      input.actionTaken,
-    );
-  } catch (err) {
-    console.error(`[writeIncident] email notification failed for incident #${incident.id}:`, err);
+  const { rows: recentNotifs } = await db.query(
+    `SELECT notification_sent_at FROM incidents
+     WHERE client_id = $1 AND check_type = $2 AND resolved = FALSE
+     AND notification_sent_at > NOW() - INTERVAL '1 hour'
+     LIMIT 1`,
+    [input.clientId, input.checkType],
+  );
+
+  if (recentNotifs.length > 0) {
+    console.log(`[writeIncident] skipping email — recent notification exists for ${input.clientId}/${input.checkType}`);
+  } else {
+    try {
+      await sendIncidentEmail(
+        input.clientId,
+        input.severity as "warning" | "critical",
+        input.checkType as import("../types.js").CheckType,
+        input.description,
+        input.claudeDiagnosis,
+        input.actionTaken,
+      );
+      await db.query(
+        `UPDATE incidents SET notification_sent_at = NOW() WHERE id = $1`,
+        [incident.id],
+      );
+    } catch (err) {
+      console.error(`[writeIncident] email notification failed for incident #${incident.id}:`, err);
+    }
   }
 
   return { incidentId: incident.id, createdAt: incident.created_at };

@@ -35,6 +35,11 @@ export async function getActiveClients(): Promise<MonitoredClient[]> {
     });
   }
 
+  if (clients.length === 0 && cached && cached.length > 0) {
+    console.warn(`[clients] WARNING: Firestore returned 0 active clients — keeping cache of ${cached.length} client(s). Possible query issue.`);
+    return cached;
+  }
+
   cached = clients;
   cachedAt = now;
   console.log(`[clients] loaded ${clients.length} active client(s) from Firestore`);
