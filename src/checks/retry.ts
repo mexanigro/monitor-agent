@@ -25,8 +25,19 @@ export async function fetchWithRetry(
       const responseTimeMs = Math.round(performance.now() - start);
       const statusCode = response.status;
 
-      if (response.ok || i === total - 1) {
+      // Retry only on transient failures: 5xx and 429. Other 4xx are
+      // deterministic — return immediately without retrying.
+      const retriable = statusCode >= 500 || statusCode === 429;
+
+      if (response.ok || !retriable || i === total - 1) {
         return { response, responseTimeMs, statusCode, error: null, attempts: i + 1 };
+      }
+
+      // Drain the discarded response so the connection can be reused/freed.
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* ignore */
       }
 
       console.log(`[${tag}] attempt ${i + 1}/${total} HTTP ${statusCode} — retry in ${RETRY_DELAYS_MS[i]}ms`);

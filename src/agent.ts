@@ -36,12 +36,39 @@ const tools: Anthropic.Messages.Tool[] = [
   { ...writeIncidentDef, cache_control: { type: "ephemeral" } } as Anthropic.Messages.Tool,
 ];
 
-const executors: Record<string, (input: Record<string, unknown>) => Promise<unknown>> = {
-  getMetricsHistory: getMetricsHistoryExec as (input: Record<string, unknown>) => Promise<unknown>,
-  vercelLogs: vercelLogsExec as (input: Record<string, unknown>) => Promise<unknown>,
-  vercelRedeploy: vercelRedeployExec as (input: Record<string, unknown>) => Promise<unknown>,
-  writeIncident: writeIncidentExec as (input: Record<string, unknown>) => Promise<unknown>,
-};
+/**
+ * Builds the tool executors bound to the client under diagnosis.
+ * vercelRedeploy validates that the model-provided projectId matches the
+ * client's real Vercel project — prevents prompt-injection-driven redeploys
+ * of arbitrary projects.
+ */
+function buildExecutors(client: MonitoredClient): Record<string, (input: Record<string, unknown>) => Promise<unknown>> {
+  return {
+    getMetricsHistory: getMetricsHistoryExec as (input: Record<string, unknown>) => Promise<unknown>,
+    vercelLogs: vercelLogsExec as (input: Record<string, unknown>) => Promise<unknown>,
+    vercelRedeploy: async (input: Record<string, unknown>) => {
+      const requestedProjectId = typeof input.projectId === "string" ? input.projectId : "";
+      if (!client.vercelProjectId) {
+        return { error: `redeploy rejected: client ${client.clientId} has no vercelProjectId configured` };
+      }
+      if (requestedProjectId !== client.vercelProjectId) {
+        console.warn(`[agent] vercelRedeploy rejected — projectId "${requestedProjectId}" does not match client under diagnosis (${client.clientId} → ${client.vercelProjectId})`);
+        return { error: `redeploy rejected: projectId "${requestedProjectId}" does not match the project of the client under diagnosis ("${client.vercelProjectId}"). You may only redeploy that project.` };
+      }
+      return vercelRedeployExec(input as { projectId: string; reason: string });
+    },
+    writeIncident: writeIncidentExec as (input: Record<string, unknown>) => Promise<unknown>,
+  };
+}
+
+const MAX_UNTRUSTED_FIELD_CHARS = 1024;
+
+/** Truncate untrusted remote-controlled strings (error bodies, descriptions) before embedding in the agent prompt. */
+function sanitizeUntrusted(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > MAX_UNTRUSTED_FIELD_CHARS ? `${flat.slice(0, MAX_UNTRUSTED_FIELD_CHARS)}… [truncated]` : flat;
+}
 
 const SYSTEM_PROMPT = `You are a monitoring agent for a multi-tenant SaaS platform deployed on Vercel.
 An automated analyzer has detected an anomaly for one of our clients.
@@ -65,7 +92,7 @@ function buildUserMessage(client: MonitoredClient, anomaly: Anomaly, metrics: Me
     `- Vercel Project ID: ${client.vercelProjectId}`,
     `- Check type: ${anomaly.checkType}`,
     `- Severity: ${anomaly.severity}`,
-    `- Description: ${anomaly.description}`,
+    `- Description: ${sanitizeUntrusted(anomaly.description)}`,
     ``,
     `## Baseline`,
     `- Avg response time: ${baseline.avg_response_time_ms}ms`,
@@ -79,7 +106,7 @@ function buildUserMessage(client: MonitoredClient, anomaly: Anomaly, metrics: Me
         success: m.success,
         responseTimeMs: m.response_time_ms,
         statusCode: m.status_code,
-        error: m.error,
+        error: sanitizeUntrusted(m.error),
         checkedAt: m.checked_at,
       })),
       null,
@@ -130,6 +157,20 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
 
   try {
     await runAgentInner(client, anomaly, metrics, baseline);
+  } catch (err) {
+    console.error(`[agent] diagnosis failed for ${anomaly.clientId}/${anomaly.checkType}:`, err);
+    try {
+      await writeIncidentExec({
+        clientId: anomaly.clientId,
+        severity: anomaly.severity,
+        checkType: anomaly.checkType,
+        description: anomaly.description,
+        claudeDiagnosis: `agent failed (${err instanceof Error ? err.message : String(err)}) — requires manual intervention`,
+        actionTaken: "requires manual intervention",
+      });
+    } catch (incidentErr) {
+      console.error(`[agent] failed to write fallback incident for ${anomaly.clientId}/${anomaly.checkType}:`, incidentErr);
+    }
   } finally {
     activeAgents--;
   }
@@ -137,6 +178,8 @@ export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metric
 
 async function runAgentInner(client: MonitoredClient, anomaly: Anomaly, metrics: MetricRow[], baseline: BaselineRow): Promise<void> {
   console.log(`[agent] starting diagnosis for ${anomaly.clientId}/${anomaly.checkType} (${anomaly.severity})`);
+
+  const executors = buildExecutors(client);
 
   const messages: Anthropic.Messages.MessageParam[] = [
     { role: "user", content: buildUserMessage(client, anomaly, metrics, baseline) },

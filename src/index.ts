@@ -1,6 +1,6 @@
 import { db } from "./db/client.js";
-import { startScheduler } from "./scheduler.js";
-import { startHealthServer } from "./health.js";
+import { startScheduler, stopScheduler } from "./scheduler.js";
+import { startHealthServer, stopHealthServer } from "./health.js";
 
 async function main(): Promise<void> {
   const dbOk = await db.healthCheck();
@@ -19,9 +19,26 @@ async function main(): Promise<void> {
   startHealthServer(port);
 }
 
+let shuttingDown = false;
+
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`[monitor] received ${signal} — shutting down`);
-  await db.end();
+
+  // 1. Stop accepting new health requests and prevent new scheduler rounds.
+  stopScheduler();
+  await stopHealthServer();
+
+  // 2. Grace period so in-flight checks/queries can finish.
+  await new Promise((resolve) => setTimeout(resolve, 5_000));
+
+  // 3. Close the DB pool and exit.
+  try {
+    await db.end();
+  } catch (err) {
+    console.error("[monitor] error closing db pool:", err);
+  }
   process.exit(0);
 }
 

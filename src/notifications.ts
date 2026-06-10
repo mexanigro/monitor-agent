@@ -1,23 +1,27 @@
 import type { CheckType, Severity } from "./types.js";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || "liam.arzac@gmail.com";
+const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
 const FROM_EMAIL = process.env.FROM_EMAIL || "Nichos Monitor <onboarding@resend.dev>";
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886";
-const NOTIFY_WHATSAPP = process.env.NOTIFY_WHATSAPP || "whatsapp:+9720557719141";
+const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM;
+const NOTIFY_WHATSAPP = process.env.NOTIFY_WHATSAPP;
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 const MAX_EMAILS_PER_HOUR = 5;
+const MAX_WHATSAPP_PER_HOUR = 3;
 const DEDUP_WINDOW_MS = 60 * 60_000;
 
 const sentTimestamps: number[] = [];
+const waSentTimestamps: number[] = [];
 const recentlySent = new Map<string, number>();
+let waSuppressedCount = 0;
+let waAggregateSentAt = 0;
 
 function isRateLimited(): boolean {
   const now = Date.now();
@@ -25,6 +29,14 @@ function isRateLimited(): boolean {
     sentTimestamps.shift();
   }
   return sentTimestamps.length >= MAX_EMAILS_PER_HOUR;
+}
+
+function isWhatsAppRateLimited(): boolean {
+  const now = Date.now();
+  while (waSentTimestamps.length > 0 && now - waSentTimestamps[0] > DEDUP_WINDOW_MS) {
+    waSentTimestamps.shift();
+  }
+  return waSentTimestamps.length >= MAX_WHATSAPP_PER_HOUR;
 }
 
 function isDuplicate(dedupKey: string): boolean {
@@ -45,12 +57,36 @@ async function sendWhatsApp(message: string, dedupKey?: string): Promise<void> {
     return;
   }
 
+  if (!TWILIO_WHATSAPP_FROM || !NOTIFY_WHATSAPP) {
+    console.warn("[notify] TWILIO_WHATSAPP_FROM/NOTIFY_WHATSAPP not set — skipping WhatsApp");
+    return;
+  }
+
   const waKey = dedupKey ? `wa:${dedupKey}` : undefined;
   if (waKey && isDuplicate(waKey)) {
     console.log(`[notify] skipping duplicate WhatsApp for ${dedupKey}`);
     return;
   }
 
+  if (isWhatsAppRateLimited()) {
+    waSuppressedCount++;
+    console.warn(`[notify] WhatsApp rate limited (${MAX_WHATSAPP_PER_HOUR}/hour) — suppressed (${waSuppressedCount} in window)`);
+    const now = Date.now();
+    if (now - waAggregateSentAt > DEDUP_WINDOW_MS) {
+      waAggregateSentAt = now;
+      const n = waSuppressedCount;
+      waSuppressedCount = 0;
+      await deliverWhatsApp(
+        `⚠️ Límite de alertas WhatsApp alcanzado (${MAX_WHATSAPP_PER_HOUR}/hora) — ${n} alerta(s) adicional(es) suprimida(s). Hay varios clientes con problemas: revisá el email o los incidentes.`,
+      );
+    }
+    return;
+  }
+
+  await deliverWhatsApp(message, waKey);
+}
+
+async function deliverWhatsApp(message: string, waKey?: string): Promise<void> {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
   const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
 
@@ -62,13 +98,14 @@ async function sendWhatsApp(message: string, dedupKey?: string): Promise<void> {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        From: TWILIO_WHATSAPP_FROM,
-        To: NOTIFY_WHATSAPP,
+        From: TWILIO_WHATSAPP_FROM as string,
+        To: NOTIFY_WHATSAPP as string,
         Body: message,
       }).toString(),
     });
 
     if (res.ok) {
+      waSentTimestamps.push(Date.now());
       if (waKey) recentlySent.set(waKey, Date.now());
       console.log(`[notify] WhatsApp sent to ${NOTIFY_WHATSAPP}`);
     } else {
@@ -83,6 +120,11 @@ async function sendWhatsApp(message: string, dedupKey?: string): Promise<void> {
 async function sendEmail(subject: string, html: string, dedupKey?: string): Promise<void> {
   if (!RESEND_API_KEY) {
     console.warn("[notify] RESEND_API_KEY not set — skipping email");
+    return;
+  }
+
+  if (!NOTIFY_EMAIL) {
+    console.warn("[notify] NOTIFY_EMAIL not set — skipping email");
     return;
   }
 

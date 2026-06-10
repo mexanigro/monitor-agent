@@ -169,7 +169,7 @@ async function computeAndSaveBaseline(clientId: string, checkType: CheckType): P
      FROM (
        SELECT response_time_ms, success
        FROM metrics
-       WHERE client_id = $1 AND check_type = $2 AND response_time_ms IS NOT NULL
+       WHERE client_id = $1 AND check_type = $2 AND response_time_ms IS NOT NULL AND success = TRUE
        ORDER BY checked_at DESC
        LIMIT 100
      ) recent`,

@@ -3,6 +3,13 @@ import { fetchWithRetry } from "./retry.js";
 import type { CheckResult, MonitoredClient } from "../types.js";
 
 const TIMEOUT_MS = 10_000;
+const MAX_FIELD_CHARS = 200;
+
+function truncateField(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const str = typeof value === "string" ? value : JSON.stringify(value);
+  return str.length > MAX_FIELD_CHARS ? `${str.slice(0, MAX_FIELD_CHARS)}…` : str;
+}
 
 export async function apiCheck(client: MonitoredClient): Promise<CheckResult> {
   const url = `${client.url}/api/health`;
@@ -20,12 +27,17 @@ export async function apiCheck(client: MonitoredClient): Promise<CheckResult> {
 
   if (res?.ok) {
     try {
-      const body = await res.json();
-      metadata = { body };
-      const status = (body as Record<string, unknown>).status;
+      const body = (await res.json()) as Record<string, unknown>;
+      // Only persist expected, truncated fields — never the raw body
+      // (remote-controlled content must not reach the DB/agent unbounded).
+      metadata = {
+        status: truncateField(body.status),
+        version: truncateField(body.version),
+      };
+      const status = body.status;
       if (status !== "ok" && status !== "healthy") {
         success = false;
-        error = `health status: ${String(status)}`;
+        error = `health status: ${truncateField(status)}`;
       }
     } catch {
       success = false;

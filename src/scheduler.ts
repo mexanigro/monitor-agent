@@ -34,22 +34,31 @@ async function runConcurrent<T>(
   await Promise.all(workers);
 }
 
-async function loop(name: "fast" | "slow", intervalMs: number, fn: () => Promise<number>): Promise<never> {
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+let shuttingDown = false;
+
+/** Stops the scheduler loops: no new rounds will start after this is called. */
+export function stopScheduler(): void {
+  shuttingDown = true;
+}
+
+async function loop(name: "fast" | "slow", intervalMs: number, fn: () => Promise<number>): Promise<void> {
+  while (!shuttingDown) {
     const start = Date.now();
     let clientCount = 0;
+    let success = false;
     try {
       clientCount = await fn();
+      success = true;
     } catch (err) {
       console.error(`[scheduler:${name}] error:`, err);
     }
     const elapsed = Date.now() - start;
-    reportRound(name, elapsed, clientCount);
-    console.log(`[scheduler:${name}] round completed in ${(elapsed / 1000).toFixed(1)}s`);
+    reportRound(name, elapsed, clientCount, success);
+    console.log(`[scheduler:${name}] round ${success ? "completed" : "FAILED"} in ${(elapsed / 1000).toFixed(1)}s`);
     const wait = Math.max(0, intervalMs - elapsed);
     if (wait > 0) await sleep(wait);
   }
+  console.log(`[scheduler:${name}] loop stopped (shutdown)`);
 }
 
 function logResult(r: CheckResult, clientName: string): void {

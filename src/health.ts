@@ -5,6 +5,7 @@ interface RoundStats {
   completedAt: number;
   durationMs: number;
   clientCount: number;
+  success: boolean;
 }
 
 const state = {
@@ -13,11 +14,16 @@ const state = {
   slow: null as RoundStats | null,
 };
 
+// Timestamp of the last SUCCESSFUL round per loop (0 = never succeeded).
+const lastSuccessAt = { fast: 0, slow: 0 };
+
 const FAST_STALE_MS = 15 * 60_000;
 const SLOW_STALE_MS = 45 * 60_000;
 
-export function reportRound(name: "fast" | "slow", durationMs: number, clientCount: number): void {
-  state[name] = { completedAt: Date.now(), durationMs, clientCount };
+export function reportRound(name: "fast" | "slow", durationMs: number, clientCount: number, success: boolean): void {
+  const completedAt = Date.now();
+  state[name] = { completedAt, durationMs, clientCount, success };
+  if (success) lastSuccessAt[name] = completedAt;
 }
 
 function isHealthy(): boolean {
@@ -26,8 +32,10 @@ function isHealthy(): boolean {
 
   if (uptime < 10 * 60_000) return true;
 
-  if (!state.fast || now - state.fast.completedAt > FAST_STALE_MS) return false;
-  if (state.slow && now - state.slow.completedAt > SLOW_STALE_MS) return false;
+  // Only rounds where fn() resolved count as healthy. A round with 0 active
+  // clients still resolves successfully, so it does NOT mark us unhealthy.
+  if (now - lastSuccessAt.fast > FAST_STALE_MS) return false;
+  if (uptime > SLOW_STALE_MS && now - lastSuccessAt.slow > SLOW_STALE_MS) return false;
 
   return true;
 }
@@ -43,9 +51,27 @@ async function getActiveIncidents(): Promise<number> {
   }
 }
 
+let _server: ReturnType<typeof createServer> | null = null;
+
+/** Closes the health HTTP server (stops accepting new connections). */
+export function stopHealthServer(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!_server) return resolve();
+    _server.close(() => resolve());
+    _server = null;
+  });
+}
+
 export function startHealthServer(port = 8080): void {
-  const server = createServer(async (_req, res) => {
+  const server = createServer(async (req, res) => {
     try {
+      const path = (req.url ?? "").split("?")[0];
+      if (path !== "/health") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
       const now = Date.now();
       const healthy = isHealthy();
       const activeIncidents = await getActiveIncidents();
@@ -79,6 +105,7 @@ export function startHealthServer(port = 8080): void {
     }
   });
 
+  _server = server;
   server.listen(port, () => {
     console.log(`[health] listening on :${port}`);
   });
