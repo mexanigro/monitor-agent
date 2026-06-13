@@ -1,0 +1,41 @@
+# Secrets and env files — never bake into image
+.env
+.env.*
+*.pem
+*.key
+*serviceAccount*.json
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Dev dependencies and local build artifacts
+node_modules/
+*.tsbuildinfo
+
+# Tests
+tests/
+coverage/
+.pytest_cache/
+__pycache__/
+
+# Docs (no README.md in this project)
+*.md
+AUDIT-MONITOR-AGENT.md
+
+# CI / pre-commit
+.pre-commit-config.yaml
+.secrets.baseline
+scripts/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# Tooling / agents
+.claude/
+skills-lock.json
+.agents

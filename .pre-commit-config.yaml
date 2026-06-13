@@ -1,0 +1,18 @@
+# Pre-commit hooks for secret detection.
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        name: gitleaks — detect secrets
+        description: Block commits that contain secrets (keys, tokens, passwords).
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: detect-private-key
+        name: Detect private keys
+      - id: check-added-large-files
+        args: ["--maxkb=500"]

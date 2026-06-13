@@ -9,6 +9,8 @@ dist/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 *serviceAccount*.json
 firebase-debug.log
 .firebase/
@@ -29,6 +31,11 @@ coverage/
 
 # Tooling / agents
 .claude/
+
+# Python (tooling)
+__pycache__/
+.pytest_cache/
+*.pyc
 
 # Editor / OS
 .vscode/

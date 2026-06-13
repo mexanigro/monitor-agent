@@ -1,8 +1,11 @@
+import { validateEnv } from "./env.js";
 import { db } from "./db/client.js";
 import { startScheduler, stopScheduler } from "./scheduler.js";
 import { startHealthServer, stopHealthServer } from "./health.js";
 
 async function main(): Promise<void> {
+  validateEnv();
+
   const dbOk = await db.healthCheck();
   if (!dbOk) {
     console.error("[monitor] cannot connect to database — exiting");
