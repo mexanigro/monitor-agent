@@ -57,4 +57,6 @@ export interface Anomaly {
   checkType: CheckType;
   severity: Severity;
   description: string;
+  /** false = registrar el incidente sin email (P-04: latencia con baseline vieja). Default true. */
+  notify?: boolean;
 }

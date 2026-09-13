@@ -145,6 +145,6 @@ Liam le pidió a Claude que, si en algún momento experimenta algo parecido a su
 
 ## Qué vigila y cuándo alerta (P-04, 2026-09-13)
 - Objetivos: `hub_clients` con `status` **active o demo** y `deployUrl` (`src/targets.ts`), más el hub `https://arzac.studio` (sólo http) y una sonda opcional `MONITOR_PROBE_URL`. `suspended`/`archived` no se vigilan.
-- Alerta crítica (email a `NOTIFY_EMAIL`): **dos fallos seguidos** de http/api separados ≥ 60 s (fast cada 5 min), sin necesidad de baseline (`src/anomalies.ts`). Un fallo aislado no alerta. La latencia (>3× p95) sigue exigiendo baseline (≥ 10 checks); la tasa de éxito < 95 % sólo con ≥ 10 métricas.
+- Alerta crítica (email a `NOTIFY_EMAIL`): **dos fallos seguidos** de http/api separados ≥ 60 s (fast cada 5 min), sin necesidad de baseline (`src/anomalies.ts`). Un fallo aislado no alerta. Latencia: crítica sólo con **dos muestras consecutivas** >3× p95 (≥ 60 s) y **baseline fresca** (calculada en los últimos 7 días sobre las muestras de esos 7 días, recalculada cada hora; con < 10 muestras en la ventana no hay baseline y la heredada se borra); con baseline vieja → warning **sin email**; sin baseline → nada. La tasa de éxito < 95 % sólo con ≥ 10 métricas. (Corrección tras los falsos positivos #97/#98 del 2026-09-13: una muestra de 593 ms contra un p95 de junio.)
 - Cada fetch reintenta 1/2/4 s ante 5xx/red (`src/checks/retry.ts`): absorbe el 503 de arranque en frío y mantiene calientes los sitios.
 - Tests: `npm test` (tsc + `node --test dist/**/*.test.js`).

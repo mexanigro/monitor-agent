@@ -6,7 +6,9 @@ import { sendResolvedEmail } from "./notifications.js";
 import type { BaselineRow, CheckType, MetricRow, MonitoredClient } from "./types.js";
 
 const MIN_CHECKS_FOR_BASELINE = 10;
-const BASELINE_MAX_AGE_MS = 24 * 60 * 60_000;
+// P-04 desvío 1: la baseline se recalcula cada hora sobre los últimos 7 días; con menos de 10 muestras en la ventana no hay baseline.
+const BASELINE_MAX_AGE_MS = 60 * 60_000;
+const BASELINE_WINDOW_DAYS = 7;
 
 export async function analyzeClient(client: MonitoredClient, checkTypes: CheckType[]): Promise<void> {
   for (const checkType of checkTypes) {
@@ -32,6 +34,10 @@ async function analyzeCheckType(client: MonitoredClient, checkType: CheckType): 
     const totalChecks = await getCheckCount(clientId, checkType);
     if (totalChecks >= MIN_CHECKS_FOR_BASELINE) {
       baseline = await computeAndSaveBaseline(clientId, checkType);
+    } else if (baseline) {
+      // Baseline heredada sin datos recientes que la respalden: se retira para no comparar contra otra época.
+      await db.query(`DELETE FROM baselines WHERE client_id = $1 AND check_type = $2`, [clientId, checkType]);
+      baseline = null;
     }
   }
 
@@ -50,6 +56,7 @@ async function analyzeCheckType(client: MonitoredClient, checkType: CheckType): 
 
   if (worst.severity !== "critical") {
     await writeIncidentExec({
+      notify: worst.notify,
       clientId: client.clientId,
       severity: worst.severity,
       checkType,
@@ -93,8 +100,10 @@ async function getBaseline(clientId: string, checkType: CheckType): Promise<Base
 
 async function getCheckCount(clientId: string, checkType: CheckType): Promise<number> {
   const { rows } = await db.query(
-    `SELECT COUNT(*)::int AS count FROM metrics WHERE client_id = $1 AND check_type = $2`,
-    [clientId, checkType],
+    `SELECT COUNT(*)::int AS count FROM metrics
+     WHERE client_id = $1 AND check_type = $2 AND success = TRUE AND response_time_ms IS NOT NULL
+       AND checked_at > NOW() - ($3 || ' days')::interval`,
+    [clientId, checkType, String(BASELINE_WINDOW_DAYS)],
   );
   return (rows[0] as { count: number }).count;
 }
@@ -109,10 +118,11 @@ async function computeAndSaveBaseline(clientId: string, checkType: CheckType): P
        SELECT response_time_ms, success
        FROM metrics
        WHERE client_id = $1 AND check_type = $2 AND response_time_ms IS NOT NULL AND success = TRUE
+         AND checked_at > NOW() - ($3 || ' days')::interval
        ORDER BY checked_at DESC
        LIMIT 100
      ) recent`,
-    [clientId, checkType],
+    [clientId, checkType, String(BASELINE_WINDOW_DAYS)],
   );
 
   const raw = rows[0] as { avg_response_time_ms: number; p95_response_time_ms: number; success_rate: number };

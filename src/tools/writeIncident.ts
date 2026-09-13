@@ -21,6 +21,8 @@ export const definition: Anthropic.Messages.Tool = {
 };
 
 export async function execute(input: {
+  /** false = registrar sin email (P-04). Default true. */
+  notify?: boolean;
   clientId: string;
   severity: string;
   checkType: string;
@@ -46,7 +48,9 @@ export async function execute(input: {
     [input.clientId, input.checkType],
   );
 
-  if (recentNotifs.length > 0) {
+  if (input.notify === false) {
+    console.log(`[writeIncident] no email (notify=false) for ${input.clientId}/${input.checkType}`);
+  } else if (recentNotifs.length > 0) {
     console.log(`[writeIncident] skipping email — recent notification exists for ${input.clientId}/${input.checkType}`);
   } else {
     try {
