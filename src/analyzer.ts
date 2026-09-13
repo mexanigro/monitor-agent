@@ -1,12 +1,12 @@
 import { db } from "./db/client.js";
-import { runAgent } from "./agent.js";
+import { runAgent, isAgentEnabled } from "./agent.js";
+import { detectAnomalies } from "./anomalies.js";
 import { execute as writeIncidentExec } from "./tools/writeIncident.js";
 import { sendResolvedEmail } from "./notifications.js";
-import type { Anomaly, BaselineRow, CheckType, MetricRow, MonitoredClient } from "./types.js";
+import type { BaselineRow, CheckType, MetricRow, MonitoredClient } from "./types.js";
 
 const MIN_CHECKS_FOR_BASELINE = 10;
 const BASELINE_MAX_AGE_MS = 24 * 60 * 60_000;
-const FIRESTORE_LATENCY_THRESHOLD_MS = 2_000;
 
 export async function analyzeClient(client: MonitoredClient, checkTypes: CheckType[]): Promise<void> {
   for (const checkType of checkTypes) {
@@ -32,12 +32,11 @@ async function analyzeCheckType(client: MonitoredClient, checkType: CheckType): 
     const totalChecks = await getCheckCount(clientId, checkType);
     if (totalChecks >= MIN_CHECKS_FOR_BASELINE) {
       baseline = await computeAndSaveBaseline(clientId, checkType);
-    } else if (!baseline) {
-      return;
     }
   }
 
-  const anomalies = detectAnomalies(clientId, checkType, metrics, baseline);
+  // P-04: los fallos se detectan sin baseline (dos seguidos ≥ 60 s); la latencia sigue exigiéndola (anomalies.ts).
+  const anomalies = detectAnomalies(clientId, checkType, metrics, baseline ?? null);
   if (anomalies.length === 0) return;
 
   const hasOpenIncident = await hasUnresolvedIncident(clientId, checkType);
@@ -61,79 +60,19 @@ async function analyzeCheckType(client: MonitoredClient, checkType: CheckType): 
     return;
   }
 
+  if (!isAgentEnabled() || !baseline) {
+    await writeIncidentExec({
+      clientId: client.clientId,
+      severity: worst.severity,
+      checkType,
+      description: worst.description,
+      claudeDiagnosis: "Sin diagnóstico IA (agente apagado: MONITOR_AGENT_ENABLED ≠ true) — revisar manualmente",
+      actionTaken: "requires manual intervention",
+    });
+    return;
+  }
+
   await runAgent(client, worst, metrics, baseline);
-}
-
-function detectAnomalies(
-  clientId: string,
-  checkType: CheckType,
-  metrics: MetricRow[],
-  baseline: BaselineRow,
-): Anomaly[] {
-  const anomalies: Anomaly[] = [];
-  const latest = metrics[0];
-
-  if ((checkType === "http" || checkType === "api") && !latest.success) {
-    anomalies.push({
-      clientId,
-      checkType,
-      severity: "critical",
-      description: `${checkType} check failed: ${latest.error ?? "unknown error"}`,
-    });
-  }
-
-  if (latest.response_time_ms !== null && baseline.p95_response_time_ms > 0) {
-    if (latest.response_time_ms > baseline.p95_response_time_ms * 3) {
-      anomalies.push({
-        clientId,
-        checkType,
-        severity: "critical",
-        description: `response time ${latest.response_time_ms}ms is >3x p95 baseline (${baseline.p95_response_time_ms}ms)`,
-      });
-    } else {
-      // Only check sustained warning if not already critical
-      const last3 = metrics.slice(0, 3);
-      if (
-        last3.length === 3 &&
-        last3.every((m) => m.response_time_ms !== null && m.response_time_ms > baseline.p95_response_time_ms * 1.5)
-      ) {
-        anomalies.push({
-          clientId,
-          checkType,
-          severity: "warning",
-          description: `response time exceeded 1.5x p95 baseline for 3 consecutive checks`,
-        });
-      }
-    }
-  }
-
-  const successCount = metrics.filter((m) => m.success).length;
-  const successRate = (successCount / metrics.length) * 100;
-  if (successRate < 95) {
-    anomalies.push({
-      clientId,
-      checkType,
-      severity: "warning",
-      description: `success rate ${successRate.toFixed(1)}% in last ${metrics.length} checks (below 95%)`,
-    });
-  }
-
-  if (checkType === "firestore") {
-    const last2 = metrics.slice(0, 2);
-    if (
-      last2.length === 2 &&
-      last2.every((m) => m.response_time_ms !== null && m.response_time_ms > FIRESTORE_LATENCY_THRESHOLD_MS)
-    ) {
-      anomalies.push({
-        clientId,
-        checkType,
-        severity: "warning",
-        description: `Firestore latency >${FIRESTORE_LATENCY_THRESHOLD_MS}ms for 2 consecutive checks`,
-      });
-    }
-  }
-
-  return anomalies;
 }
 
 async function getRecentMetrics(clientId: string, checkType: CheckType, limit: number): Promise<MetricRow[]> {

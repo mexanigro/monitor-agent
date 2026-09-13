@@ -8,13 +8,19 @@ const CRITICAL_VARS = [
 
 /** Vars required for specific features — logged as warnings but don't abort startup. */
 const FEATURE_VARS: Record<string, string> = {
-  ANTHROPIC_API_KEY: "Claude diagnostic agent will be disabled",
-  VERCEL_TOKEN: "Vercel logs and redeploy tools will be unavailable",
   RESEND_API_KEY: "Email notifications will be disabled",
   NOTIFY_EMAIL: "Email notifications will be disabled",
 };
 
 export function validateEnv(): void {
+  // P-04 D-P4-4: el agente IA está apagado salvo MONITOR_AGENT_ENABLED=true; sólo entonces importan sus claves.
+  if (process.env.MONITOR_AGENT_ENABLED === "true") {
+    for (const v of ["ANTHROPIC_API_KEY", "VERCEL_TOKEN"]) {
+      if (!process.env[v]?.trim()) console.warn(`[env] WARNING — ${v} not set: Claude agent / Vercel tools degraded`);
+    }
+  } else {
+    console.log("[env] Claude agent OFF (MONITOR_AGENT_ENABLED !== \"true\") — incidents are logged and emailed without AI");
+  }
   const missing = CRITICAL_VARS.filter((v) => !process.env[v]?.trim());
   if (missing.length > 0) {
     console.error(

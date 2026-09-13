@@ -1,49 +1,25 @@
 import { getDb } from "./firestore.js";
-import type { MonitoredClient, CheckType } from "./types.js";
+import { selectTargets } from "./targets.js";
+import type { MonitoredClient } from "./types.js";
 
 const CACHE_TTL_MS = 5 * 60_000;
-const ALL_CHECKS: CheckType[] = ["http", "api", "firestore", "booking"];
 
 let cached: MonitoredClient[] | null = null;
 let cachedAt = 0;
 
+/** P-04: sitios del hub en status active o demo + el hub + sonda opcional (ver targets.ts). */
 export async function getActiveClients(): Promise<MonitoredClient[]> {
   const now = Date.now();
   if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
 
   const db = getDb();
-  const snap = await db
-    .collection("hub_clients")
-    .where("status", "==", "active")
-    .get();
+  const snap = await db.collection("hub_clients").where("status", "in", ["active", "demo"]).get();
+  const targets = selectTargets(snap.docs.map((doc) => ({ id: doc.id, data: doc.data() })), process.env);
 
-  const clients: MonitoredClient[] = [];
-  for (const doc of snap.docs) {
-    const d = doc.data();
-    if (!d.clientId || !d.deployUrl) {
-      console.warn(`[clients] skipping doc ${doc.id}: missing clientId=${!!d.clientId} deployUrl=${!!d.deployUrl}`);
-      continue;
-    }
-    clients.push({
-      clientId: d.clientId as string,
-      name: (d.businessName as string) || d.clientId,
-      url: d.deployUrl as string,
-      vercelProjectId: (d.vercelProjectId as string) || "",
-      niche: (d.niche as string) || "",
-      active: true,
-      checks: (d.monitorChecks as CheckType[]) ?? ALL_CHECKS,
-    });
-  }
-
-  if (clients.length === 0 && cached && cached.length > 0) {
-    console.warn(`[clients] WARNING: Firestore returned 0 active clients — keeping cache of ${cached.length} client(s). Possible query issue.`);
-    return cached;
-  }
-
-  cached = clients;
+  cached = targets;
   cachedAt = now;
-  console.log(`[clients] loaded ${clients.length} active client(s) from Firestore`);
-  return clients;
+  console.log(`[clients] loaded ${targets.length} target(s): ${targets.map((t) => t.clientId).join(", ")}`);
+  return targets;
 }
 
 export function invalidateClientCache(): void {

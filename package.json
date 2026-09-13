@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "tsc && node --test \"dist/**/*.test.js\"",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "db:init": "psql $DATABASE_URL -f src/db/schema.sql"

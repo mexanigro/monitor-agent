@@ -115,9 +115,14 @@ function buildUserMessage(client: MonitoredClient, anomaly: Anomaly, metrics: Me
   ].join("\n");
 }
 
+/** P-04 D-P4-4: el agente con IA (y su herramienta vercelRedeploy) sólo corre con MONITOR_AGENT_ENABLED === "true"; apagado por defecto. */
+export function isAgentEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.MONITOR_AGENT_ENABLED === "true";
+}
+
 export async function runAgent(client: MonitoredClient, anomaly: Anomaly, metrics: MetricRow[], baseline: BaselineRow): Promise<void> {
-  if (process.env.MONITOR_AGENT_ENABLED === "false") {
-    console.log("[agent] disabled via env — skipping");
+  if (!isAgentEnabled()) {
+    console.log("[agent] disabled (MONITOR_AGENT_ENABLED !== \"true\") — skipping");
     return;
   }
 

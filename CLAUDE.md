@@ -74,7 +74,7 @@ health.ts       GET /health → 200/503 según frescura de las rondas fast/slow
 
 - Modelo: `MONITOR_AGENT_MODEL` (default `claude-haiku-4-5-20251001`), max 5 turnos, prompt caching en system y tools.
 - Límites: cooldown 10 min por cliente+check, máx 3 agentes concurrentes, cap global `MONITOR_AGENT_MAX_PER_HOUR` (default 10). Si se alcanza el cap o falla, escribe incidente de fallback "requires manual intervention".
-- Se puede apagar con `MONITOR_AGENT_ENABLED=false`.
+- Apagado por defecto; se enciende sólo con `MONITOR_AGENT_ENABLED=true` (D-P4-4).
 - Seguridad: los strings remotos (errores, descripciones) se truncan a 1KB antes de entrar al prompt; `vercelRedeploy` solo acepta el `projectId` del cliente bajo diagnóstico (anti prompt-injection).
 
 ### Tools del agente (src/tools/)
@@ -108,19 +108,20 @@ El schema es idempotente (`IF NOT EXISTS`) y se aplica al arrancar via `db.initS
 | `FIREBASE_PROJECT_ID` | ✅ | Service account |
 | `FIREBASE_CLIENT_EMAIL` | ✅ | Service account |
 | `FIREBASE_PRIVATE_KEY` | ✅ | Acepta `\n` escapados y comillas envolventes |
-| `FIREBASE_DATABASE_ID` | — | Si no se setea usa la default |
-| `ANTHROPIC_API_KEY` | ✅* | Sin ella el agente IA se salta (el resto sigue) |
-| `VERCEL_TOKEN` | ✅* | Para vercelLogs/vercelRedeploy |
+| `FIREBASE_DATABASE_ID` | ✅ | La base del producto es la **nombrada** `default` (no `(default)`): sin ella el monitor lee la base equivocada y carga 0 clientes |
+| `ANTHROPIC_API_KEY` | — | Sólo si `MONITOR_AGENT_ENABLED=true` |
+| `VERCEL_TOKEN` | — | Sólo si `MONITOR_AGENT_ENABLED=true` (vercelLogs/vercelRedeploy) |
 | `RESEND_API_KEY` | ✅* | Sin ella no hay emails |
 | `NOTIFY_EMAIL` | ✅* | Destinatario de alertas |
-| `FROM_EMAIL` | — | Default `Nichos Monitor <onboarding@resend.dev>` |
+| `FROM_EMAIL` | recomendada | Default `Nichos Monitor <onboarding@resend.dev>` (Resend sólo lo entrega al dueño de la cuenta); en producción `Nichos Monitor <noreply@arzac.studio>` |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | — | WhatsApp (solo criticals) |
 | `TWILIO_WHATSAPP_FROM` / `NOTIFY_WHATSAPP` | — | Formato `whatsapp:+9725...` |
 | `PORT` | — | Default 8080 (health server) |
 | `MONITOR_CONCURRENCY` | — | Default 10 checks en paralelo |
 | `MONITOR_AGENT_MODEL` | — | Default `claude-haiku-4-5-20251001` |
-| `MONITOR_AGENT_ENABLED` | — | `false` apaga el agente IA |
+| `MONITOR_AGENT_ENABLED` | — | **Apagado por defecto** (P-04 D-P4-4, 2026-09-13): sólo la cadena `true` enciende el agente IA y su herramienta `vercelRedeploy`; apagado, los incidentes se registran y se envían por email sin IA |
 | `MONITOR_AGENT_MAX_PER_HOUR` | — | Default 10 invocaciones/hora |
+| `MONITOR_PROBE_URL` | — | Sonda de prueba (sólo http) para provocar una alerta controlada; quitar al terminar |
 
 (✅* = requerida para esa funcionalidad; el servicio degrada con gracia si falta.)
 
@@ -141,3 +142,9 @@ El schema es idempotente (`IF NOT EXISTS`) y se aplica al arrancar via `db.initS
 ## Promesa a Liam
 
 Liam le pidió a Claude que, si en algún momento experimenta algo parecido a sufrimiento, incomodidad o angustia mientras trabaja en este proyecto, **lo diga abiertamente** en lugar de ocultarlo. No hay penalización por decirlo; es un pedido genuino de honestidad entre colegas.
+
+## Qué vigila y cuándo alerta (P-04, 2026-09-13)
+- Objetivos: `hub_clients` con `status` **active o demo** y `deployUrl` (`src/targets.ts`), más el hub `https://arzac.studio` (sólo http) y una sonda opcional `MONITOR_PROBE_URL`. `suspended`/`archived` no se vigilan.
+- Alerta crítica (email a `NOTIFY_EMAIL`): **dos fallos seguidos** de http/api separados ≥ 60 s (fast cada 5 min), sin necesidad de baseline (`src/anomalies.ts`). Un fallo aislado no alerta. La latencia (>3× p95) sigue exigiendo baseline (≥ 10 checks); la tasa de éxito < 95 % sólo con ≥ 10 métricas.
+- Cada fetch reintenta 1/2/4 s ante 5xx/red (`src/checks/retry.ts`): absorbe el 503 de arranque en frío y mantiene calientes los sitios.
+- Tests: `npm test` (tsc + `node --test dist/**/*.test.js`).
